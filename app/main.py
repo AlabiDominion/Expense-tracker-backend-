@@ -10,6 +10,7 @@ from .models import Category
 from .auth import router as auth_router
 from .workspace import router as workspace_router
 from .statements import router as statement_router
+from .planning import router as planning_router
 
 app=FastAPI(title='CloudBerth Expense Tracker',version='2.0.0',description='Free personal finance workspaces by CloudBerth Technologies.')
 app.add_middleware(CORSMiddleware,allow_origins=settings.cors_origins,allow_credentials=True,allow_methods=['GET','POST','PUT','PATCH','DELETE'],allow_headers=['Content-Type','X-Requested-With'])
@@ -37,4 +38,5 @@ def health(db: Session = Depends(get_db)):
 app.include_router(auth_router)
 app.include_router(workspace_router)
 app.include_router(statement_router)
+app.include_router(planning_router)
 

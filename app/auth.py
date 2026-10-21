@@ -14,7 +14,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .database import get_db
-from .models import User, Category, Transaction, AuthSession, AccountToken
+from .models import User, Category, Transaction, AuthSession, AccountToken, Budget, Debt, DebtPayment, MonthlyPlan
 from .security import COOKIE, create_session, get_current_user, hash_token, now, public_user
 from .config import settings
 from .default_categories import create_user_categories
@@ -142,7 +142,7 @@ def reset(body: NewPassword,request: Request,db: Session=Depends(get_db)):
 def delete_account(body: ConfirmPassword,response: Response,user: User=Depends(get_current_user),db: Session=Depends(get_db)):
     if not user.password_hash or not passwords.verify(body.password,user.password_hash):
         raise HTTPException(401,'Your password is incorrect.')
-    for model in [Transaction,Category,AuthSession,AccountToken]:
+    for model in [DebtPayment,Debt,Budget,MonthlyPlan,Transaction,Category,AuthSession,AccountToken]:
         db.execute(delete(model).where(model.user_id==user.id))
     db.delete(user)
     db.commit()
@@ -152,8 +152,9 @@ def delete_account(body: ConfirmPassword,response: Response,user: User=Depends(g
 
 @router.get('/export')
 def export_account(user: User=Depends(get_current_user),db: Session=Depends(get_db)):
+    from .planning import planning
     from .schemas import CategoryOutput, TransactionOutput
-    return {'profile':public_user(user),'categories':[CategoryOutput.model_validate(row).model_dump(mode='json') for row in db.scalars(select(Category).where(Category.user_id==user.id)).all()],'transactions':[TransactionOutput.model_validate(row).model_dump(mode='json') for row in db.scalars(select(Transaction).where(Transaction.user_id==user.id)).all()]}
+    return {**planning(db,user),'profile':public_user(user),'categories':[CategoryOutput.model_validate(row).model_dump(mode='json') for row in db.scalars(select(Category).where(Category.user_id==user.id)).all()],'transactions':[TransactionOutput.model_validate(row).model_dump(mode='json') for row in db.scalars(select(Transaction).where(Transaction.user_id==user.id)).all()]}
 
 class ProfileUpdate(BaseModel):
     name: str = Field(min_length=2,max_length=100,pattern=r'.*\S.*')
@@ -163,3 +164,4 @@ def update_profile(body: ProfileUpdate,user: User=Depends(get_current_user),db: 
     user.name=body.name.strip()
     db.commit()
     return public_user(user)
+

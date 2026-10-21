@@ -3,7 +3,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .database import get_db
-from .models import Category, Transaction, User
+from .models import Category, Transaction, User, Budget, DebtPayment
 from .schemas import CategoryInput, CategoryOutput, TransactionInput, TransactionOutput
 from .reports import monthly_report
 from .security import get_current_user
@@ -47,7 +47,9 @@ def add_transaction(body: TransactionInput, db: Session = Depends(get_db), user:
 
 @router.put('/transactions/{transaction_id}', response_model=TransactionOutput)
 def update_transaction(transaction_id: int, body: TransactionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    row = db.scalar(select(Transaction).where(Transaction.id == transaction_id, Transaction.user_id == user.id))
+    row = db.scalar(select(Transaction).where(Transaction.id == transaction_id, Transaction.user_id == user.id).with_for_update())
+    if db.scalar(select(DebtPayment.id).where(DebtPayment.transaction_id==transaction_id, DebtPayment.user_id==user.id).with_for_update()):
+        raise HTTPException(409, 'Unlink this expense from its debt repayment before editing it.')
     if not row:
         raise HTTPException(404, 'Transaction not found')
     validate_category(body, db, user.id)
@@ -59,7 +61,9 @@ def update_transaction(transaction_id: int, body: TransactionInput, db: Session 
 
 @router.delete('/transactions/{transaction_id}', status_code=204)
 def delete_transaction(transaction_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    row = db.scalar(select(Transaction).where(Transaction.id == transaction_id, Transaction.user_id == user.id))
+    row = db.scalar(select(Transaction).where(Transaction.id == transaction_id, Transaction.user_id == user.id).with_for_update())
+    if db.scalar(select(DebtPayment.id).where(DebtPayment.transaction_id==transaction_id, DebtPayment.user_id==user.id).with_for_update()):
+        raise HTTPException(409, 'Unlink this expense from its debt repayment before deleting it.')
     if not row:
         raise HTTPException(404, 'Transaction not found')
     db.delete(row)
@@ -78,6 +82,8 @@ def report(month: str, db: Session = Depends(get_db), user: User = Depends(get_c
 
 @router.delete('/categories/{category_id}', status_code=204)
 def delete_category(category_id: int, replacement_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if db.scalar(select(Budget.id).where(Budget.category_id==category_id, Budget.user_id==user.id).limit(1)):
+        raise HTTPException(409, 'Remove this category’s budgets before deleting the category.')
     category = db.scalar(select(Category).where(Category.id == category_id, Category.user_id == user.id))
     if not category:
         raise HTTPException(404, 'Category not found')
@@ -97,3 +103,4 @@ def delete_category(category_id: int, replacement_id: int | None = None, db: Ses
         db.rollback()
         raise HTTPException(409, 'This category is still in use. Refresh and choose a replacement category.')
     return Response(status_code=204)
+
