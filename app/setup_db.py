@@ -5,7 +5,7 @@ from sqlalchemy.engine import make_url
 from alembic import command
 from alembic.config import Config
 from .config import settings
-from .seed import seed
+
 
 def setup():
     url = make_url(settings.database_url)
@@ -23,11 +23,12 @@ def setup():
         config = Config(str(root / 'alembic.ini'))
         config.set_main_option('script_location', str(root / 'migrations'))
         command.upgrade(config, 'head')
-        seed(categories_only=True)
+        # Categories are created per user at registration; no shared workspace is seeded.
         print('MySQL database initialized. Demo transactions were not imported.')
     finally:
         server.dispose()
 
 if __name__ == '__main__':
     setup()
+
 

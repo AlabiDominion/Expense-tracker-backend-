@@ -5,20 +5,24 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from app.database import Base, get_db
 from app.main import app
-from app.models import Category
+from app.models import Category, User
+from app.security import get_current_user
 
 @pytest.fixture()
 def client():
     engine = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     with Session(engine) as db:
-        db.add_all([Category(id=1,name='Salary',type='income',color='#188c68',icon='+'),Category(id=2,name='Food',type='expense',color='#e9a24b',icon='-')])
+        db.add(User(id=1,name='Test User',email='test@example.com',password_hash=None))
+        db.flush()
+        db.add_all([Category(user_id=1,id=1,name='Salary',type='income',color='#188c68',icon='+'),Category(user_id=1,id=2,name='Food',type='expense',color='#e9a24b',icon='-')])
         db.commit()
     def override():
         with Session(engine) as db:
             yield db
     app.dependency_overrides[get_db] = override
-    with TestClient(app) as test_client:
+    app.dependency_overrides[get_current_user] = lambda: User(id=1,name='Test User',email='test@example.com')
+    with TestClient(app,headers={'X-Requested-With':'CloudBerth'}) as test_client:
         yield test_client
     app.dependency_overrides.clear()
     engine.dispose()
@@ -115,3 +119,16 @@ def test_used_category_requires_same_type_replacement(client):
     assert saved[0]['id']==transaction['id']
     assert saved[0]['category_id']==replacement['id']
     assert saved[0]['amount']==transaction['amount']
+
+
+def test_total_net_carries_previous_months_and_updates_after_delete(client):
+    previous = client.post('/transactions',json=payload('100.10','2025-12-31',1,'income')).json()
+    client.post('/transactions',json=payload('20.20','2026-02-01'))
+    client.post('/transactions',json=payload('999.00','2026-03-01'))
+    report = client.get('/reports/2026-02').json()
+    assert report['total_net'] == '79.90'
+    assert report['net_cash_flow'] == '-20.20'
+    assert report['balance_as_of'] == '2026-02-28'
+    assert client.get('/reports/2026-01').json()['total_net'] == '100.10'
+    client.delete(f"/transactions/{previous['id']}")
+    assert client.get('/reports/2026-02').json()['total_net'] == '-20.20'

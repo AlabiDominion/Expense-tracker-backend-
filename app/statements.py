@@ -10,7 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from .database import get_db
-from .models import Category, Transaction
+from .models import Category, Transaction, User
+from .security import get_current_user
 from .statement_parser import parse_statement, StatementError
 
 router = APIRouter(prefix='/statements', tags=['Statement imports'])
@@ -44,7 +45,7 @@ def suggest_category(description, kind, categories):
     return None
 
 @router.post('/preview')
-async def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def preview(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         content = await file.read(MAX_BYTES+1)
     finally:
@@ -56,8 +57,8 @@ async def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     except StatementError as error:
         raise HTTPException(422,str(error))
     scope = result['scope']
-    categories = db.scalars(select(Category)).all()
-    saved = db.scalars(select(Transaction)).all()
+    categories = db.scalars(select(Category).where(Category.user_id == user.id)).all()
+    saved = db.scalars(select(Transaction).where(Transaction.user_id == user.id)).all()
     known = {t.import_key for t in saved if t.import_key}
     signatures = {signature(t.transaction_date,t.type,t.amount,t.description) for t in saved}
     seen = set()
@@ -71,9 +72,9 @@ async def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return result
 
 @router.post('/import')
-def commit_import(body: ImportRequest, db: Session = Depends(get_db)):
-    known = set(db.scalars(select(Transaction.import_key).where(Transaction.import_key.is_not(None))).all())
-    categories = {c.id:c for c in db.scalars(select(Category)).all()}
+def commit_import(body: ImportRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    known = set(db.scalars(select(Transaction.import_key).where(Transaction.user_id == user.id, Transaction.import_key.is_not(None))).all())
+    categories = {c.id:c for c in db.scalars(select(Category).where(Category.user_id == user.id)).all()}
     imported,skipped = 0,0
     ids = []
     for row in body.rows:
@@ -89,12 +90,12 @@ def commit_import(body: ImportRequest, db: Session = Depends(get_db)):
         else:
             category = next((c for c in categories.values() if c.type==row.type and c.name=='Uncategorized'),None)
             if category is None:
-                category=Category(name='Uncategorized',type=row.type,color='#788fa0',icon='◇')
+                category=Category(user_id=user.id,name='Uncategorized',type=row.type,color='#788fa0',icon='◇')
                 db.add(category)
                 db.flush()
                 categories[category.id]=category
             category_id=category.id
-        transaction=Transaction(**row.model_dump(exclude={'reference','category_id'}),category_id=category_id,source='moniepoint_pdf',import_key=key)
+        transaction=Transaction(**row.model_dump(exclude={'reference','category_id'}),category_id=category_id,user_id=user.id,source='moniepoint_pdf',import_key=key)
         db.add(transaction)
         known.add(key)
         imported += 1
@@ -105,3 +106,4 @@ def commit_import(body: ImportRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(409,'A matching import was saved at the same time. Preview the statement again.')
     return {'imported':imported,'skipped':skipped,'transaction_ids':[row.id for row in ids]}
+
